@@ -21,17 +21,39 @@ cd infra-mcp
 go build -o infra-mcp .
 ```
 
-### Run the server
+## Usage
+
+### Server Modes
+
+The server supports three transport modes:
+
+#### Stdio Mode (Default)
+
+For local MCP clients like Claude Desktop or Cline:
 
 ```bash
 ./infra-mcp
 ```
 
-The server runs over stdin/stdout and communicates using the MCP protocol.
+#### SSE Mode
 
-## Usage
+For HTTP-based MCP clients with Server-Sent Events:
 
-### get_server_info
+```bash
+./infra-mcp --mode sse --port 8080
+```
+
+#### Streamable HTTP Mode
+
+For modern HTTP-based MCP clients:
+
+```bash
+./infra-mcp --mode streamable-http --port 8080
+```
+
+### Tool Input
+
+#### get_server_info
 
 Query server information from a node_exporter endpoint.
 
@@ -48,7 +70,7 @@ Query server information from a node_exporter endpoint.
 }
 ```
 
-### get_metrics
+#### get_metrics
 
 Query specific metrics from a Prometheus exporter.
 
@@ -69,22 +91,7 @@ Query specific metrics from a Prometheus exporter.
 
 ## Configuration
 
-### For Claude Desktop
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "infra-mcp": {
-      "command": "/path/to/infra-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-### For Cline/VS Code
+### For Cline/VS Code (Stdio Mode)
 
 Add to your `cline_mcp_settings.json`:
 
@@ -93,6 +100,20 @@ Add to your `cline_mcp_settings.json`:
   "mcpServers": {
     "infra-mcp": {
       "command": "/path/to/infra-mcp"
+    }
+  }
+}
+```
+
+### For HTTP Clients (SSE or Streamable HTTP)
+
+Start the server in SSE or streamable-http mode, then configure your client:
+
+```json
+{
+  "mcpServers": {
+    "infra-mcp": {
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
