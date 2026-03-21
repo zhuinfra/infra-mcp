@@ -9,30 +9,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThinkInAIXYZ/go-mcp/protocol"
-	"github.com/ThinkInAIXYZ/go-mcp/server"
-	"github.com/ThinkInAIXYZ/go-mcp/transport"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // QueryInput defines the input for querying an exporter
 type QueryInput struct {
-	Host    string `json:"host" description:"The IP address or hostname of the server" required:"true"`
-	Port    int    `json:"port" description:"The port number of the exporter (default 9100)"`
-	Path    string `json:"path" description:"The exporter path (default /metrics)"`
-	Metrics string `json:"metrics" description:"Comma-separated list of metric names to retrieve (optional)"`
+	Host    string `json:"host" jsonschema:"required,The IP address or hostname of the server"`
+	Port    int    `json:"port" jsonschema:"The port number of the exporter (default 9100)"`
+	Path    string `json:"path" jsonschema:"The exporter path (default /metrics)"`
+	Metrics string `json:"metrics" jsonschema:"Comma-separated list of metric names to filter (optional)"`
 }
 
 // ServerConfig holds the server configuration
 type ServerConfig struct {
 	HTTPTimeout time.Duration
-	RetryCount  int
 }
 
 // DefaultConfig returns default server configuration
 func DefaultConfig() *ServerConfig {
 	return &ServerConfig{
 		HTTPTimeout: 10 * time.Second,
-		RetryCount:  3,
 	}
 }
 
@@ -74,31 +70,27 @@ func queryExporter(ctx context.Context, config *ServerConfig, host string, port 
 	return string(body), nil
 }
 
-// handleGetServerInfo handles the get_server_info tool request
-func handleGetServerInfo(ctx context.Context, req *protocol.CallToolRequest) (*protocol.CallToolResult, error) {
-	var input QueryInput
-	if err := protocol.VerifyAndUnmarshal(req.RawArguments, &input); err != nil {
-		return nil, fmt.Errorf("invalid input: %w", err)
-	}
-
+// getServerInfo handles the get_server_info tool request
+func getServerInfo(ctx context.Context, req *mcp.CallToolRequest, input QueryInput) (*mcp.CallToolResult, any, error) {
 	config := DefaultConfig()
 	resp, err := queryExporter(ctx, config, input.Host, input.Port, input.Path)
 	if err != nil {
-		return &protocol.CallToolResult{
-			Content: []protocol.Content{
-				&protocol.TextContent{
-					Type: "text",
-					Text: fmt.Sprintf("Error querying exporter: %v", err),
-				},
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: fmt.Sprintf("Error querying exporter: %v", err)},
 			},
 			IsError: true,
-		}, nil
+		}, nil, nil
 	}
 
 	// Parse and extract useful server info
 	var infoBuilder strings.Builder
 	infoBuilder.WriteString(fmt.Sprintf("Server: %s:%d\n", input.Host, input.Port))
-	infoBuilder.WriteString(fmt.Sprintf("Path: %s\n\n", input.Path))
+	if input.Path != "" {
+		infoBuilder.WriteString(fmt.Sprintf("Path: %s\n\n", input.Path))
+	} else {
+		infoBuilder.WriteString(fmt.Sprintf("Path: /metrics\n\n", input.Path))
+	}
 
 	lines := strings.Split(resp, "\n")
 	var metrics []string
@@ -129,47 +121,36 @@ func handleGetServerInfo(ctx context.Context, req *protocol.CallToolRequest) (*p
 		}
 	}
 
-	infoBuilder.WriteString(fmt.Sprintf("Found %d unique metrics:\n", len(seen)))
+	infoBuilder.WriteString(fmt.Sprintf("Found %d unique metrics:\n\n", len(seen)))
 	count := 0
 	for m := range seen {
 		count++
-		if count <= 50 {
+		if count <= 100 {
 			infoBuilder.WriteString(fmt.Sprintf("  - %s\n", m))
 		}
 	}
-	if len(seen) > 50 {
-		infoBuilder.WriteString(fmt.Sprintf("  ... and %d more\n", len(seen)-50))
+	if len(seen) > 100 {
+		infoBuilder.WriteString(fmt.Sprintf("  ... and %d more\n", len(seen)-100))
 	}
 
-	return &protocol.CallToolResult{
-		Content: []protocol.Content{
-			&protocol.TextContent{
-				Type: "text",
-				Text: infoBuilder.String(),
-			},
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: infoBuilder.String()},
 		},
-	}, nil
+	}, nil, nil
 }
 
-// handleGetMetrics handles the get_metrics tool request
-func handleGetMetrics(ctx context.Context, req *protocol.CallToolRequest) (*protocol.CallToolResult, error) {
-	var input QueryInput
-	if err := protocol.VerifyAndUnmarshal(req.RawArguments, &input); err != nil {
-		return nil, fmt.Errorf("invalid input: %w", err)
-	}
-
+// getMetrics handles the get_metrics tool request
+func getMetrics(ctx context.Context, req *mcp.CallToolRequest, input QueryInput) (*mcp.CallToolResult, any, error) {
 	config := DefaultConfig()
 	resp, err := queryExporter(ctx, config, input.Host, input.Port, input.Path)
 	if err != nil {
-		return &protocol.CallToolResult{
-			Content: []protocol.Content{
-				&protocol.TextContent{
-					Type: "text",
-					Text: fmt.Sprintf("Error querying exporter: %v", err),
-				},
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: fmt.Sprintf("Error querying exporter: %v", err)},
 			},
 			IsError: true,
-		}, nil
+		}, nil, nil
 	}
 
 	lines := strings.Split(resp, "\n")
@@ -227,52 +208,34 @@ func handleGetMetrics(ctx context.Context, req *protocol.CallToolRequest) (*prot
 	resultBuilder.WriteString(fmt.Sprintf("Found %d metric lines:\n\n", len(filteredLines)))
 	resultBuilder.WriteString(strings.Join(filteredLines, "\n"))
 
-	return &protocol.CallToolResult{
-		Content: []protocol.Content{
-			&protocol.TextContent{
-				Type: "text",
-				Text: resultBuilder.String(),
-			},
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultBuilder.String()},
 		},
-	}, nil
+	}, nil, nil
 }
 
 func main() {
-	// Create Stdio transport server (for local MCP clients like Claude/Cline)
-	transportServer := transport.NewStdioServerTransport()
+	// Create an MCP server
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "infra-mcp",
+		Version: "v0.1.0",
+	}, nil)
 
-	// Initialize MCP server
-	mcpServer, err := server.NewServer(transportServer)
-	if err != nil {
-		log.Fatalf("Failed to create MCP server: %v", err)
-	}
+	// Add the tools
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_server_info",
+		Description: "Query node_exporter or other Prometheus exporters to get server information. Returns list of available metrics with their names.",
+	}, getServerInfo)
 
-	// Create tools
-	getServerInfoTool, err := protocol.NewTool(
-		"get_server_info",
-		"Query node_exporter or other Prometheus exporters to get server information. Returns list of available metrics with their current values.",
-		QueryInput{},
-	)
-	if err != nil {
-		log.Fatalf("Failed to create get_server_info tool: %v", err)
-	}
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_metrics",
+		Description: "Query specific metrics from a Prometheus exporter by filtering for metric names. Returns filtered metric lines with values.",
+	}, getMetrics)
 
-	getMetricsTool, err := protocol.NewTool(
-		"get_metrics",
-		"Query specific metrics from a Prometheus exporter by filtering for metric names. Returns filtered metric lines.",
-		QueryInput{},
-	)
-	if err != nil {
-		log.Fatalf("Failed to create get_metrics tool: %v", err)
-	}
-
-	// Register tools
-	mcpServer.RegisterTool(getServerInfoTool, handleGetServerInfo)
-	mcpServer.RegisterTool(getMetricsTool, handleGetMetrics)
-
-	// Start server
+	// Run the server over stdin/stdout
 	log.Println("Starting infra-mcp server...")
-	if err = mcpServer.Run(); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		log.Fatal(err)
 	}
 }
