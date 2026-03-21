@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -215,8 +217,8 @@ func getMetrics(ctx context.Context, req *mcp.CallToolRequest, input QueryInput)
 	}, nil, nil
 }
 
-func main() {
-	// Create an MCP server
+// createServer creates an MCP server with the tools
+func createServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "infra-mcp",
 		Version: "v0.1.0",
@@ -233,9 +235,78 @@ func main() {
 		Description: "Query specific metrics from a Prometheus exporter by filtering for metric names. Returns filtered metric lines with values.",
 	}, getMetrics)
 
-	// Run the server over stdin/stdout
-	log.Println("Starting infra-mcp server...")
+	return server
+}
+
+// runStdio runs the MCP server over stdin/stdout
+func runStdio() {
+	server := createServer()
+	log.Println("Starting infra-mcp server (stdio)...")
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// runSSE runs the MCP server over HTTP with SSE
+func runSSE(port string) {
+	server := createServer()
+	
+	// Create SSE handler
+	handler := mcp.NewSSEHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
+	
+	http.Handle("/mcp", handler)
+	
+	addr := ":" + port
+	if port == "" {
+		addr = ":8080"
+	}
+	
+	log.Printf("Starting infra-mcp server (SSE) on http://localhost%s/mcp", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// runStreamableHTTP runs the MCP server with streamable HTTP transport
+func runStreamableHTTP(port string) {
+	server := createServer()
+	
+	// Create streamable HTTP handler
+	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
+	
+	http.Handle("/mcp", handler)
+	
+	addr := ":" + port
+	if port == "" {
+		addr = ":8080"
+	}
+	
+	log.Printf("Starting infra-mcp server (streamable HTTP) on http://localhost%s/mcp", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func main() {
+	// Define command line flags
+	mode := flag.String("mode", "stdio", "Server mode: stdio, sse, or streamable-http")
+	port := flag.String("port", "8080", "Port for HTTP server (used with sse or streamable-http mode)")
+	flag.Parse()
+
+	switch *mode {
+	case "stdio":
+		runStdio()
+	case "sse":
+		runSSE(*port)
+	case "streamable-http":
+		runStreamableHTTP(*port)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", *mode)
+		fmt.Fprintf(os.Stderr, "Usage: infra-mcp --mode [stdio|sse|streamable-http] --port [port]\n")
+		os.Exit(1)
 	}
 }
